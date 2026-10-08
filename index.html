@@ -64,6 +64,9 @@ img.ex{max-width:100%;border:1px solid var(--bd);border-radius:8px;margin:6px 0;
  <div class="row" style="margin:8px 0 14px" id="modes"></div>
  <b>Options</b>
  <div class="row" style="margin:8px 0 16px" id="opts"></div>
+ <b>Quiz size</b>
+ <div class="row" style="margin:8px 0 8px" id="splitmode"></div>
+ <div id="size" style="margin:0 0 16px"></div>
  <div class="row"><button class="btn" id="start">Start</button><span class="sub" id="cnt" style="margin:0"></span></div>
  <div class="sub" id="missinfo" style="margin-top:10px"></div>
 </div>
@@ -85,7 +88,7 @@ const DATA=[{"id":0,"sec":0,"n":1,"q":"Which Layer 2 attack will result in legit
 const SECS=[{k:3,n:'Modules 1–4: Switching, VLANs & Inter-VLAN'},{k:4,n:'Modules 5–6: STP & EtherChannel'},{k:5,n:'Modules 7–9: DHCP, FHRP & SLAAC'},{k:0,n:'Modules 10–13: L2 Security & WLANs'},{k:1,n:'Modules 14–16: Routing Concepts & Config'},{k:2,n:'⌨️ Command practice (type it in)'}];
 const $=s=>document.querySelector(s);
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
-let st={secs:LS.get('secs3',[0,1,2,3,4,5]),mode:LS.get('mode','quiz'),shuffle:LS.get('shuffle',true),shufOpts:LS.get('shufOpts',true),missedOnly:false};
+let st={secs:LS.get('secs3',[0,1,2,3,4,5]),mode:LS.get('mode','quiz'),shuffle:LS.get('shuffle',true),shufOpts:LS.get('shufOpts',true),missedOnly:false,total:LS.get('total',0),split:LS.get('split','even'),counts:LS.get('counts',{})};
 let missed=new Set(LS.get('missed',[]));
 let deck=[],i=0,res={},flip=false,sel=[],checked=false,pairSel={};
 const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -93,15 +96,36 @@ const shuf=a=>{a=a.slice();for(let j=a.length-1;j>0;j--){const k=Math.floor(Math
 $('#sub').textContent=DATA.length+' questions from your PDF · answers shown right after you answer';
 function chips(el,items,isOn,onClick){el.innerHTML='';items.forEach(it=>{const b=document.createElement('button');b.className='chip'+(isOn(it)?' on':'');b.textContent=it.n;b.onclick=()=>{onClick(it);renderSetup()};el.appendChild(b)})}
 function pool(){let p=DATA.filter(q=>st.secs.includes(q.sec));if(st.missedOnly)p=p.filter(q=>missed.has(q.id));return p}
+
+const INP='padding:8px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--tx)';
+function takes(){const by={},take={};st.secs.forEach(k=>by[k]=DATA.filter(q=>q.sec==k&&(!st.missedOnly||missed.has(q.id))));
+ if(st.split=='custom')st.secs.forEach(k=>take[k]=Math.min(by[k].length,st.counts[k]==null?by[k].length:st.counts[k]));
+ else{const ks=st.secs.filter(k=>by[k].length);ks.forEach(k=>take[k]=0);let left=Math.min(st.total>0?st.total:1e9,ks.reduce((a,k)=>a+by[k].length,0));
+  while(left>0){let m=false;for(const k of ks){if(left>0&&take[k]<by[k].length){take[k]++;left--;m=true}}if(!m)break}}
+ return{by,take}}
+function build(){const t=takes();let r=[];st.secs.forEach(k=>{r=r.concat(shuf(t.by[k]).slice(0,t.take[k]||0))});return r}
+function updCount(){const t=takes(),n=Object.values(t.take).reduce((a,b)=>a+b,0);$('#cnt').textContent=n+' question'+(n==1?'':'s')+' in this quiz';$('#start').disabled=!n}
+function renderSize(){
+ chips($('#splitmode'),[{k:'even',n:'Even split'},{k:'custom',n:'Custom per module'}],m=>st.split==m.k,m=>{st.split=m.k;LS.set('split',m.k)});
+ const t=takes(),box=$('#size'),all=Object.values(t.by).reduce((a,b)=>a+b.length,0);
+ if(st.split=='even'){
+  box.innerHTML='<div class="row"><label>Total questions <input type="number" id="tot" min="1" max="'+all+'" value="'+(st.total||'')+'" placeholder="All ('+all+')" style="width:120px;'+INP+'"></label>'+[10,20,50,100].map(n=>'<button class="chip" data-n="'+n+'">'+n+'</button>').join('')+'<button class="chip" data-n="0">All</button></div><div class="sub" style="margin-top:6px">Spread evenly across the selected modules.</div>';
+  $('#tot').oninput=e=>{st.total=Math.max(0,parseInt(e.target.value)||0);LS.set('total',st.total);updCount()};
+  box.querySelectorAll('[data-n]').forEach(b=>b.onclick=()=>{st.total=+b.dataset.n;LS.set('total',st.total);renderSize()});
+ }else{
+  box.innerHTML=st.secs.length?'<div class="pairs">'+st.secs.map(k=>'<div class="row" style="justify-content:space-between"><span class="pl" style="flex:1;min-width:200px">'+esc(SECS.find(s=>s.k==k).n)+'</span><span><input type="number" data-k="'+k+'" min="0" max="'+t.by[k].length+'" value="'+t.take[k]+'" style="width:84px;'+INP+'"> of '+t.by[k].length+'</span></div>').join('')+'</div>':'<div class="sub">Select at least one module above.</div>';
+  box.querySelectorAll('input[data-k]').forEach(i=>i.oninput=()=>{st.counts[i.dataset.k]=Math.max(0,parseInt(i.value)||0);LS.set('counts',st.counts);updCount()});
+ }
+ updCount()}
 function renderSetup(){
  chips($('#secs'),SECS,s=>st.secs.includes(s.k),s=>{const x=st.secs.indexOf(s.k);x>=0?st.secs.splice(x,1):st.secs.push(s.k);LS.set('secs3',st.secs)});
  chips($('#modes'),[{k:'quiz',n:'📝 Quiz (check after each answer)'},{k:'flash',n:'🃏 Flashcards (flip to reveal)'}],m=>st.mode==m.k,m=>{st.mode=m.k;LS.set('mode',m.k)});
  chips($('#opts'),[{k:'shuffle',n:'Shuffle questions'},{k:'shufOpts',n:'Shuffle choices'},{k:'missedOnly',n:'Only ones I missed ('+missed.size+')'}],o=>st[o.k],o=>{st[o.k]=!st[o.k];if(o.k!='missedOnly')LS.set(o.k,st[o.k])});
- const n=pool().length;$('#cnt').textContent=n+' question'+(n==1?'':'s')+' selected';$('#start').disabled=!n;
+ renderSize();
  $('#missinfo').innerHTML=missed.size?'<button class="btn sec" id="clr">Clear missed list</button>':'';
  if(missed.size)$('#clr').onclick=()=>{missed.clear();LS.set('missed',[]);st.missedOnly=false;renderSetup()};
 }
-function start(){deck=pool();if(st.shuffle)deck=shuf(deck);deck=deck.map(q=>{q=Object.assign({},q);if(st.shufOpts&&q.opts.length&&!/all of the above|none of the above|both/i.test(q.opts.map(o=>o.t).join('|')))q.opts=shuf(q.opts);if(q.pairs)q.pool=shuf(q.pairs.map(p=>p[1]).filter((v,x,a)=>a.indexOf(v)==x).concat(q.extra||[]));return q});
+function start(){deck=build();if(st.shuffle)deck=shuf(deck);else deck.sort((a,b)=>a.id-b.id);deck=deck.map(q=>{q=Object.assign({},q);if(st.shufOpts&&q.opts.length&&!/all of the above|none of the above|both/i.test(q.opts.map(o=>o.t).join('|')))q.opts=shuf(q.opts);if(q.pairs)q.pool=shuf(q.pairs.map(p=>p[1]).filter((v,x,a)=>a.indexOf(v)==x).concat(q.extra||[]));return q});
  i=0;res={};$('#setup').classList.add('hide');$('#done').classList.add('hide');$('#play').classList.remove('hide');show()}
 function imgs(a){return a.map(s=>'<img class="ex" src="'+s+'" alt="Exhibit">').join('')}
 function show(){
@@ -176,7 +200,7 @@ function finish(){
  const wrong=deck.filter(q=>res[q.id]&&!res[q.id].ok);
  d.innerHTML='<div class="big">'+(st.mode=='quiz'?Math.round(ok/n*100)+'%':ok+' / '+n)+'</div><div style="text-align:center" class="sub">'+ok+' of '+n+' '+(st.mode=='quiz'?'correct':'marked as known')+'</div>'+
   (wrong.length?'<b>To review ('+wrong.length+')</b><ol style="padding-left:20px">'+wrong.map(q=>'<li style="margin:6px 0">'+esc(q.q.length>140?q.q.slice(0,140)+'…':q.q)+'</li>').join('')+'</ol>':'<p style="text-align:center">🎉 Perfect run!</p>')+
-  '<div class="row" style="justify-content:center;margin-top:12px"><button class="btn" id="again">Retry same set</button>'+(wrong.length?'<button class="btn sec" id="rm">Practice missed only</button>':'')+'<button class="btn sec" id="home">Home</button></div>';
+  '<div class="row" style="justify-content:center;margin-top:12px"><button class="btn" id="again">New round (same settings)</button>'+(wrong.length?'<button class="btn sec" id="rm">Practice missed only</button>':'')+'<button class="btn sec" id="home">Home</button></div>';
  $('#again').onclick=()=>{$('#done').classList.add('hide');start()};
  if(wrong.length)$('#rm').onclick=()=>{st.missedOnly=true;$('#done').classList.add('hide');start()};
  $('#home').onclick=()=>{st.missedOnly=false;$('#done').classList.add('hide');$('#setup').classList.remove('hide');renderSetup()};
